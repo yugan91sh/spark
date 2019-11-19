@@ -283,7 +283,6 @@ case class Union(children: Seq[LogicalPlan]) extends LogicalPlan {
       .reduce(merge(_, _))
   }
 }
-
 case class Join(
     left: LogicalPlan,
     right: LogicalPlan,

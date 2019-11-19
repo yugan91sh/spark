@@ -190,7 +190,16 @@ case class FileSourceScanExec(
   @transient private lazy val selectedPartitions: Seq[PartitionDirectory] = {
     val optimizerMetadataTimeNs = relation.location.metadataOpsTimeNs.getOrElse(0L)
     val startTime = System.nanoTime()
-    val ret = relation.location.listFiles(partitionFilters, dataFilters)
+    var ret = relation.location.listFiles(partitionFilters, dataFilters)
+    if (optionalBucketSet.isDefined) {
+      val bucketSet = optionalBucketSet.get
+      ret = ret.map(pat =>
+        PartitionDirectory(pat.values, pat.files.filter {
+          st =>
+            bucketSet.get(BucketingUtils.getBucketId(st.getPath.getName)
+              .getOrElse(sys.error(s"Invalid bucket file ${st.getPath}")))
+        }))
+    }
     val timeTakenMs = ((System.nanoTime() - startTime) + optimizerMetadataTimeNs) / 1000 / 1000
 
     metrics("numFiles").add(ret.map(_.files.size.toLong).sum)
