@@ -85,7 +85,8 @@ import org.apache.spark.sql.execution.{ShuffledRowRDD, SparkPlan}
 class ExchangeCoordinator(
     advisoryTargetPostShuffleInputSize: Long,
     minNumPostShufflePartitions: Option[Int] = None,
-  maxTargetPostShuffleInputSize: Long = -1L)
+    maxTargetPostShuffleInputSize: Long = -1L,
+    encounterRepartition: Boolean = false)
   extends Logging {
 
   // The registered Exchange operators.
@@ -242,7 +243,7 @@ class ExchangeCoordinator(
         } else {
           estimatePartitionStartIndices(mapOutputStatistics)
         }
-      if (maxTargetPostShuffleInputSize > 0) {
+      if (maxTargetPostShuffleInputSize > 0 && exchanges.forall(_.isRepartition.get)) {
         val moreThan = mapOutputStatistics.apply(0)
            .bytesByPartitionId
            .zipWithIndex

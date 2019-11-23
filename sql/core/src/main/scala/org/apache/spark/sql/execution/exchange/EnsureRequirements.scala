@@ -61,7 +61,11 @@ case class EnsureRequirements(conf: SQLConf) extends Rule[SparkPlan] {
         // Right now, ExchangeCoordinator only support HashPartitionings.
         children.forall {
           case e @ ShuffleExchangeExec(hash: HashPartitioning, _, _, _) =>
-            e.isAEGenerated.get
+            if (e.isRepartition.get && !conf.allowAEwhenRepartition) {
+              false
+            } else {
+              true
+            }
           case child =>
             child.outputPartitioning match {
               case hash: HashPartitioning => true
@@ -89,9 +93,9 @@ case class EnsureRequirements(conf: SQLConf) extends Rule[SparkPlan] {
             minNumPostShufflePartitions,
             maxTargetPostShuffleInputSize)
         children.zip(requiredChildDistributions).map {
-          case (e @ ShuffleExchangeExec(_, _, _, Some(true)), _) =>
+          case (e @ ShuffleExchangeExec(_, _, _, _), _) =>
             // This child is an Exchange, we need to add the coordinator.
-            e.copy(coordinator = Some(coordinator), isAEGenerated = e.isAEGenerated)
+            e.copy(coordinator = Some(coordinator), isRepartition = e.isRepartition)
           case (child, distribution) =>
             // If this child is not an Exchange, we need to add an Exchange for now.
             // Ideally, we can try to avoid this Exchange. However, when we reach here,
@@ -132,7 +136,7 @@ case class EnsureRequirements(conf: SQLConf) extends Rule[SparkPlan] {
             // partitions when one post-shuffle partition includes multiple pre-shuffle partitions.
             val targetPartitioning = distribution.createPartitioning(defaultNumPreShufflePartitions)
             assert(targetPartitioning.isInstanceOf[HashPartitioning])
-            ShuffleExchangeExec(targetPartitioning, child, Some(coordinator), Some(true))
+            ShuffleExchangeExec(targetPartitioning, child, Some(coordinator), Some(false))
         }
       } else {
         // If we do not need ExchangeCoordinator, the original children are returned.
@@ -196,7 +200,7 @@ case class EnsureRequirements(conf: SQLConf) extends Rule[SparkPlan] {
             val defaultPartitioning = distribution.createPartitioning(targetNumPartitions)
             child match {
               // If child is an exchange, we replace it with a new one having defaultPartitioning.
-              case ShuffleExchangeExec(_, c, _, Some(true)) =>
+              case ShuffleExchangeExec(_, c, _, Some(false)) =>
                 ShuffleExchangeExec(defaultPartitioning, c)
               case _ => ShuffleExchangeExec(defaultPartitioning, child)
             }

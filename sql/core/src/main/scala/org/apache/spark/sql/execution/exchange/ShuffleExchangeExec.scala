@@ -42,7 +42,7 @@ import org.apache.spark.util.collection.unsafe.sort.{PrefixComparators, RecordCo
 case class ShuffleExchangeExec(var newPartitioning: Partitioning,
                                child: SparkPlan,
                                @transient coordinator: Option[ExchangeCoordinator],
-                               isAEGenerated: Option[Boolean] = Some(true)) extends Exchange {
+                               isRepartition: Option[Boolean] = Some(false)) extends Exchange {
 
   // NOTE: coordinator can be null after serialization/deserialization,
   //       e.g. it can be null on the Executor side
@@ -138,7 +138,7 @@ object ShuffleExchangeExec {
     ShuffleExchangeExec(newPartitioning,
       child,
       coordinator = Option.empty[ExchangeCoordinator],
-      isAEGenerated = Some(true))
+      isRepartition = Some(false))
   }
 
   /**

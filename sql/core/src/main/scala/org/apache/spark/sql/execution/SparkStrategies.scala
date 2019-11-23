@@ -628,7 +628,7 @@ abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
       case r: logical.Range =>
         execution.RangeExec(r) :: Nil
       case r: logical.RepartitionByExpression =>
-        exchange.ShuffleExchangeExec(r.partitioning, planLater(r.child), None, Some(false)) :: Nil
+        exchange.ShuffleExchangeExec(r.partitioning, planLater(r.child), None, Some(true)) :: Nil
       case ExternalRDD(outputObjAttr, rdd) => ExternalRDDScanExec(outputObjAttr, rdd) :: Nil
       case r: LogicalRDD =>
         RDDScanExec(r.output, r.rdd, "ExistingRDD", r.outputPartitioning, r.outputOrdering) :: Nil
