@@ -1595,6 +1595,13 @@ object SQLConf {
     buildConf("spark.sql.default.database")
     .stringConf
     .createWithDefault(null)
+
+  val TEMP_VIEW_DATABASE_ENABLED =
+    buildConf("spark.sql.tempView.database.enabled")
+      .internal()
+      .doc("When false, it is not allowed to add database prefix for the TEMPORARY view name.")
+      .booleanConf
+      .createWithDefault(false)
 }
 
 /**
@@ -2018,6 +2025,8 @@ class SQLConf extends Serializable with Logging {
   def maxMemUsageDuringCollect : Option[Long] = getConf(SQLConf.MAX_MEM_USAGE_DURING_COLLECT)
 
   def defaultDataBase: String = getConf(SQLConf.DEFAULT_DATABASE_NAME)
+
+  def tempViewDatabaseEnabled: Boolean = getConf(TEMP_VIEW_DATABASE_ENABLED)
 
   /** ********************** SQLConf functionality methods ************ */
 

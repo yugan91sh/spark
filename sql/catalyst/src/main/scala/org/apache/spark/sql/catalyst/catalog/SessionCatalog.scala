@@ -105,6 +105,8 @@ class SessionCatalog(
 
   private val validNameFormat = "([\\w_]+)".r
 
+  private val tempViewDatabaseEnabled = conf.tempViewDatabaseEnabled
+
   /**
    * Checks if the given name conforms the Hive standard ("[a-zA-Z_0-9]+"),
    * i.e. if this name only contains characters, numbers, and _.
@@ -699,7 +701,8 @@ class SessionCatalog(
         globalTempViewManager.get(table).map { viewDef =>
           SubqueryAlias(table, db, viewDef)
         }.getOrElse(throw new NoSuchTableException(db, table))
-      } else if (name.database.isDefined || !tempViews.contains(table)) {
+      } else if ((!tempViewDatabaseEnabled && name.database.isDefined)
+        || !tempViews.contains(table)) {
         val metadata = externalCatalog.getTable(db, table)
         if (metadata.tableType == CatalogTableType.VIEW) {
           val viewText = metadata.viewText.getOrElse(sys.error("Invalid view without text."))

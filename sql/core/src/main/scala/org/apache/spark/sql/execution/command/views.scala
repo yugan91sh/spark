@@ -93,7 +93,8 @@ case class CreateViewCommand(
     child: LogicalPlan,
     allowExisting: Boolean,
     replace: Boolean,
-    viewType: ViewType)
+    viewType: ViewType,
+    allowDatabase: Boolean = false)
   extends RunnableCommand {
 
   import ViewHelper._
@@ -117,7 +118,7 @@ case class CreateViewCommand(
   }
 
   // Temporary view names should NOT contain database prefix like "database.table"
-  if (isTemporary && name.database.isDefined) {
+  if (isTemporary && !allowDatabase && name.database.isDefined) {
     val database = name.database.get
     throw new AnalysisException(
       s"It is not allowed to add database prefix `$database` for the TEMPORARY view name.")
