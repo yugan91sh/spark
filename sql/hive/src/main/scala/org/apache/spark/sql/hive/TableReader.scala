@@ -217,6 +217,10 @@ class HadoopTableReader(
       val partDesc = Utilities.getPartitionDesc(partition)
       val partPath = partition.getDataLocation
       val inputPathStr = applyFilterIfNeeded(partPath, filterOpt)
+      val skipHeaderLineCount =
+          tableDesc.getProperties.getProperty("skip.header.line.count", "0").toInt
+      val isTextInputFormatTable =
+          classOf[TextInputFormat].isAssignableFrom(partDesc.getInputFileFormatClass)
       val ifc = partDesc.getInputFileFormatClass
         .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
       // Get partition field info
@@ -258,11 +262,13 @@ class HadoopTableReader(
 
       // Create local references so that the outer object isn't serialized.
       val localTableDesc = tableDesc
-      createHadoopRdd(localTableDesc, inputPathStr, ifc).mapPartitions { iter =>
+      val rdd = createHadoopRdd(localTableDesc, inputPathStr, ifc)
+      rdd.mapPartitionsWithIndex { (index, iter) =>
         val hconf = broadcastedHiveConf.value.value
         val deserializer = localDeserializer.newInstance()
         // SPARK-13709: For SerDes like AvroSerDe, some essential information (e.g. Avro schema
-        // information) may be defined in table properties. Here we should merge table properties
+        // information) may be defined in table
+        // properties. Here we should merge table properties
         // and partition properties before initializing the deserializer. Note that partition
         // properties take a higher priority here. For example, a partition may have a different
         // SerDe as the one defined in table properties.
@@ -274,7 +280,18 @@ class HadoopTableReader(
         // get the table deserializer
         val tableSerDe = localTableDesc.getDeserializerClass.newInstance()
         tableSerDe.initialize(hconf, localTableDesc.getProperties)
-
+        if (skipHeaderLineCount > 0 && isTextInputFormatTable) {
+          rdd.partitions(index) match {
+            case partition: HadoopPartition =>
+              if (partition.inputSplit.t.asInstanceOf[FileSplit].getStart() == 0) {
+                var i = 0
+                while (i < skipHeaderLineCount && iter.hasNext) {
+                  i += 1
+                  iter.next()
+                }
+              }
+          }
+        }
         // fill the non partition key attributes
         HadoopTableReader.fillObject(iter, deserializer, nonPartitionKeyAttrs,
           mutableRow, tableSerDe)
