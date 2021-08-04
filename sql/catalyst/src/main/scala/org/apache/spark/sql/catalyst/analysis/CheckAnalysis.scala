@@ -455,7 +455,8 @@ trait CheckAnalysis extends PredicateHelper {
                 // The dataType of the output attributes may be not the same with that of the view
                 // output, so we should cast the attribute to the dataType of the view output
                 // attribute. Will throw an AnalysisException if the cast is not a up-cast.
-                if (!Cast.canUpCast(originAttr.dataType, attr.dataType)) {
+                if (!SQLConf.get.isViewTruncateEnable
+                  && !Cast.canUpCast(originAttr.dataType, attr.dataType)) {
                   throw new AnalysisException(s"Cannot up cast ${originAttr.sql} from " +
                     s"${originAttr.dataType.catalogString} to ${attr.dataType.catalogString} " +
                     "as it may truncate\n")

@@ -3052,6 +3052,11 @@ object SQLConf {
       .stringConf
       .createWithDefault(null)
 
+  val VIEW_TRUNCATE_ENABLE =
+    buildConf("spark.sql.view-truncate-enabled")
+      .booleanConf
+      .createWithDefault(false)
+
   /**
    * Holds information about keys that have been deprecated.
    *
@@ -3656,6 +3661,8 @@ class SQLConf extends Serializable with Logging {
     getConf(SQLConf.LEGACY_REPLACE_DATABRICKS_SPARK_AVRO_ENABLED)
 
   def setOpsPrecedenceEnforced: Boolean = getConf(SQLConf.LEGACY_SETOPS_PRECEDENCE_ENABLED)
+
+  def isViewTruncateEnable: Boolean = getConf(SQLConf.VIEW_TRUNCATE_ENABLE)
 
   def exponentLiteralAsDecimalEnabled: Boolean =
     getConf(SQLConf.LEGACY_EXPONENT_LITERAL_AS_DECIMAL_ENABLED)
