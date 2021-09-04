@@ -22,7 +22,7 @@
   <parent>
     <groupId>org.apache.spark</groupId>
     <artifactId>spark-parent_2.12</artifactId>
-    <version>3.1.1-kylin-4.x-r33</version>
+    <version>3.1.1-kylin-4.x-r34</version>
     <relativePath>../../pom.xml</relativePath>
   </parent>
 
@@ -116,6 +116,11 @@
       <groupId>org.apache.hive</groupId>
       <artifactId>hive-llap-client</artifactId>
       <scope>${hive.llap.scope}</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hive</groupId>
+      <artifactId>hive-contrib</artifactId>
+      <scope>compile</scope>
     </dependency>
     <!-- hive-serde already depends on avro, but this brings in customized config of avro deps from parent -->
     <dependency>
