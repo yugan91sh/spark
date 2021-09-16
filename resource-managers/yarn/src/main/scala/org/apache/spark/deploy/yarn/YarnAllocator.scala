@@ -32,7 +32,7 @@ import org.apache.hadoop.yarn.client.api.AMRMClient
 import org.apache.hadoop.yarn.client.api.AMRMClient.ContainerRequest
 import org.apache.hadoop.yarn.conf.YarnConfiguration
 
-import org.apache.spark.{SecurityManager, SparkConf, SparkException}
+import org.apache.spark.{SecurityManager, SparkConf, SparkEnv, SparkException}
 import org.apache.spark.deploy.yarn.YarnSparkHadoopUtil._
 import org.apache.spark.deploy.yarn.config._
 import org.apache.spark.internal.Logging
@@ -163,6 +163,12 @@ private[yarn] class YarnAllocator(
   private[yarn] val containerPlacementStrategy =
     new LocalityPreferredContainerPlacementStrategy(sparkConf, conf, resource, resolver)
 
+  // Avoid YarnAllocator#allocateResources after Spark Context stopped
+  private[yarn] val adaptiveLaunchExecutorEnabled = //
+    sparkConf.get(YARN_ADAPTIVE_EXECUTOR_LAUNCH_ENABLED)
+
+  @volatile private var envSetted = false
+
   def getNumExecutorsRunning: Int = runningExecutors.size()
 
   def getNumReleasedContainers: Int = releasedContainers.size()
@@ -241,6 +247,18 @@ private[yarn] class YarnAllocator(
    * This must be synchronized because variables read in this method are mutated by other methods.
    */
   def allocateResources(): Unit = synchronized {
+    // In case of launching container for am: alternative=true
+    if (adaptiveLaunchExecutorEnabled) {
+      val currentEnv = SparkEnv.get
+      if(currentEnv ne null) {
+        envSetted = true
+      }
+      if(envSetted && (currentEnv == null || currentEnv.isStopped)) {
+        logInfo("Wouldn't allocate resources when spark env is null or stopped.")
+        return
+      }
+    }
+
     updateResourceRequests()
 
     val progressIndicator = 0.1f
