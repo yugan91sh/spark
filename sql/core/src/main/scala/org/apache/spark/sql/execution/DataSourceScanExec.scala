@@ -52,6 +52,8 @@ trait DataSourceScanExec extends LeafExecNode {
     s"Scan $relation ${tableIdentifier.map(_.unquotedString).getOrElse("")}"
   }
 
+  override def isSplittableScan: Boolean = true
+
   // Metadata that describes more details of this scan.
   protected def metadata: Map[String, String]
 
