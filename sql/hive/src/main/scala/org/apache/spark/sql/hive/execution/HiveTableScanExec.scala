@@ -65,6 +65,8 @@ case class HiveTableScanExec(
 
   override def nodeName: String = s"Scan hive ${relation.tableMeta.qualifiedName}"
 
+  override def isSplittableScan: Boolean = true
+
   override lazy val metrics = Map(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"),
     "readBytes" -> SQLMetrics.createMetric(sparkContext, "number of read bytes")

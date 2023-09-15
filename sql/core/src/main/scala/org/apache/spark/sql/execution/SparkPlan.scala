@@ -74,6 +74,9 @@ abstract class SparkPlan extends QueryPlan[SparkPlan] with Logging with Serializ
    */
   def supportsColumnar: Boolean = false
 
+
+  def isSplittableScan: Boolean = false
+
   /**
    * The exact java types of the columns that are output in columnar processing mode. This
    * is a performance optimization for code generation and is optional.

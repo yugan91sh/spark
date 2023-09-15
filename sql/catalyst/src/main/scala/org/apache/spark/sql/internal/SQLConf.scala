@@ -547,6 +547,35 @@ object SQLConf {
       .checkValue(_ > 0, "advisoryPartitionSizeInBytes must be positive")
       .createWithDefaultString("64MB")
 
+  val SPLIT_SOURCE_PARTITION_ENABLED = buildConf("spark.sql.splitSourcePartition.enabled")
+    .doc("When true, split source partition.")
+    .version("3.2.0")
+    .booleanConf
+    .createWithDefault(false)
+
+  val SPLIT_SOURCE_PARTITION_PREFERSHUFFLE =
+    buildConf("spark.sql.splitSourcePartition.preferShuffle")
+    .doc("Rebalance partitions preferring shuffle, with internal row skipping as the alternative.")
+    .version("3.2.0")
+    .booleanConf
+    .createWithDefault(true)
+
+  val SPLIT_SOURCE_PARTITION_ROWCOUNT =
+    buildConf("spark.sql.splitSourcePartition.rowCount")
+      .internal()
+      .doc("The suggestion row count of split partition.")
+      .version("3.2.0")
+      .longConf
+      .checkValue(_ > 0, "The row count must be positive")
+      .createWithDefault(20000L)
+
+  val SPLIT_SOURCE_PARTITION_NUM = buildConf("spark.sql.splitSourcePartition.num")
+    .doc("The suggestion partition num to split.")
+    .version("3.2.0")
+    .intConf
+    .checkValue(v => v > 0, "The partition number must be a positive integer.")
+    .createWithDefault(10)
+
   val ADAPTIVE_EXECUTION_ENABLED = buildConf("spark.sql.adaptive.enabled")
     .doc("When true, enable adaptive query execution, which re-optimizes the query plan in the " +
       "middle of query execution, based on accurate runtime statistics.")
@@ -3796,6 +3825,14 @@ class SQLConf extends Serializable with Logging {
   }
 
   def maxCollectSize: Option[Long] = getConf(SQLConf.MAX_COLLECT_SIZE)
+
+  def splitSourcePartitionEnabled: Boolean = getConf(SPLIT_SOURCE_PARTITION_ENABLED)
+
+  def splitSourcePartitionPreferShuffle: Boolean = getConf(SPLIT_SOURCE_PARTITION_PREFERSHUFFLE)
+
+  def splitSourcePartitionRowCount: Long = getConf(SPLIT_SOURCE_PARTITION_ROWCOUNT)
+
+  def splitSourcePartitionNum: Int = getConf(SPLIT_SOURCE_PARTITION_NUM)
 
   def adaptiveExecutionEnabled: Boolean = getConf(ADAPTIVE_EXECUTION_ENABLED)
 
