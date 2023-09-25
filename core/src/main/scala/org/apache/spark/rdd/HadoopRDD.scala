@@ -41,7 +41,7 @@ import org.apache.spark.internal.config._
 import org.apache.spark.rdd.HadoopRDD.HadoopMapPartitionsWithSplitRDD
 import org.apache.spark.scheduler.{HDFSCacheTaskLocation, HostTaskLocation}
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.util.{NextIterator, SerializableConfiguration, ShutdownHookManager, Utils}
+import org.apache.spark.util.{NextIterator, SerializableConfiguration, ShutdownHookManager, SliceNextIterator, Utils}
 
 /**
  * A Spark split class that wraps around a Hadoop InputSplit.
@@ -346,6 +346,136 @@ class HadoopRDD[K, V](
             updateBytesRead()
           } else if (split.inputSplit.value.isInstanceOf[FileSplit] ||
                      split.inputSplit.value.isInstanceOf[CombineFileSplit]) {
+            // If we can't get the bytes read from the FS stats, fall back to the split size,
+            // which may be inaccurate.
+            try {
+              inputMetrics.incBytesRead(split.inputSplit.value.getLength)
+            } catch {
+              case e: java.io.IOException =>
+                logWarning("Unable to get input size to set InputMetrics for task", e)
+            }
+          }
+        }
+      }
+    }
+    new InterruptibleIterator[(K, V)](context, iter)
+  }
+
+  override def sliceIterator(from: Long,
+                             until: Long,
+                             theSplit: Partition,
+                             context: TaskContext): Iterator[(K, V)] = {
+
+    val iter = new SliceNextIterator[(K, V)](from, until) {
+      logInfo(s"SliceNextIterator: from $from until $until")
+      private val split = theSplit.asInstanceOf[HadoopPartition]
+      logInfo("Input split: " + split.inputSplit)
+      private val jobConf = getJobConf()
+
+      private val inputMetrics = context.taskMetrics().inputMetrics
+      private val existingBytesRead = inputMetrics.bytesRead
+
+      // Sets InputFileBlockHolder for the file block's information
+      split.inputSplit.value match {
+        case fs: FileSplit =>
+          InputFileBlockHolder.set(fs.getPath.toString, fs.getStart, fs.getLength)
+        case _ =>
+          InputFileBlockHolder.unset()
+      }
+
+      // Find a function that will return the FileSystem bytes read by this thread. Do this before
+      // creating RecordReader, because RecordReader's constructor might read some bytes
+      private val getBytesReadCallback: Option[() => Long] = split.inputSplit.value match {
+        case _: FileSplit | _: CombineFileSplit =>
+          Some(SparkHadoopUtil.get.getFSBytesReadOnThreadCallback())
+        case _ => None
+      }
+
+      // We get our input bytes from thread-local Hadoop FileSystem statistics.
+      // If we do a coalesce, however, we are likely to compute multiple partitions in the same
+      // task and in the same thread, in which case we need to avoid override values written by
+      // previous partitions (SPARK-13071).
+      private def updateBytesRead(): Unit = {
+        getBytesReadCallback.foreach { getBytesRead =>
+          inputMetrics.setBytesRead(existingBytesRead + getBytesRead())
+        }
+      }
+
+      private var reader: RecordReader[K, V] = null
+      private val inputFormat = getInputFormat(jobConf)
+      HadoopRDD.addLocalConfiguration(
+        new SimpleDateFormat("yyyyMMddHHmmss", Locale.US).format(createTime),
+        context.stageId, theSplit.index, context.attemptNumber, jobConf)
+
+      reader =
+        try {
+          inputFormat.getRecordReader(split.inputSplit.value, jobConf, Reporter.NULL)
+        } catch {
+          case e: FileNotFoundException if ignoreMissingFiles =>
+            logWarning(s"Skipped missing file: ${split.inputSplit}", e)
+            finished = true
+            null
+          // Throw FileNotFoundException even if `ignoreCorruptFiles` is true
+          case e: FileNotFoundException if !ignoreMissingFiles => throw e
+          case e: IOException if ignoreCorruptFiles =>
+            logWarning(s"Skipped the rest content in the corrupted file: ${split.inputSplit}", e)
+            finished = true
+            null
+        }
+      // Register an on-task-completion callback to close the input stream.
+      context.addTaskCompletionListener[Unit] { context =>
+        // Update the bytes read before closing is to make sure lingering bytesRead statistics in
+        // this thread get correctly added.
+        updateBytesRead()
+        closeIfNeeded()
+      }
+
+      private val key: K = if (reader == null) null.asInstanceOf[K] else reader.createKey()
+      private val value: V = if (reader == null) null.asInstanceOf[V] else reader.createValue()
+
+      override def readNext(): Unit = {
+        try {
+          finished = !reader.next(key, value)
+        } catch {
+          case e: FileNotFoundException if ignoreMissingFiles =>
+            logWarning(s"Skipped missing file: ${split.inputSplit}", e)
+            finished = true
+          // Throw FileNotFoundException even if `ignoreCorruptFiles` is true
+          case e: FileNotFoundException if !ignoreMissingFiles => throw e
+          case e: IOException if ignoreCorruptFiles =>
+            logWarning(s"Skipped the rest content in the corrupted file: ${split.inputSplit}", e)
+            finished = true
+        }
+      }
+
+      override def getNext(): (K, V) = {
+        readNext()
+        if (!finished) {
+          inputMetrics.incRecordsRead(1)
+        }
+        if (inputMetrics.recordsRead % SparkHadoopUtil.UPDATE_INPUT_METRICS_INTERVAL_RECORDS == 0) {
+          updateBytesRead()
+        }
+        (key, value)
+      }
+
+      override def close(): Unit = {
+        if (reader != null) {
+          InputFileBlockHolder.unset()
+          try {
+            reader.close()
+          } catch {
+            case e: Exception =>
+              if (!ShutdownHookManager.inShutdown()) {
+                logWarning("Exception in RecordReader.close()", e)
+              }
+          } finally {
+            reader = null
+          }
+          if (getBytesReadCallback.isDefined) {
+            updateBytesRead()
+          } else if (split.inputSplit.value.isInstanceOf[FileSplit] ||
+            split.inputSplit.value.isInstanceOf[CombineFileSplit]) {
             // If we can't get the bytes read from the FS stats, fall back to the split size,
             // which may be inaccurate.
             try {
