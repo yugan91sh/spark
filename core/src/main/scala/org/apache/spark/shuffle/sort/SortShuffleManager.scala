@@ -17,12 +17,17 @@
 
 package org.apache.spark.shuffle.sort
 
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.{Callable, ConcurrentHashMap, Executors, Future}
+import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable
+
+import com.google.common.util.concurrent.ThreadFactoryBuilder
 
 import org.apache.spark._
 import org.apache.spark.internal.Logging
+import org.apache.spark.internal.config.{SHUFFLE_MULTITHREADED, SHUFFLE_MULTITHREADED_WRITER_THREADS}
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.api.ShuffleExecutorComponents
 import org.apache.spark.util.collection.OpenHashSet
@@ -78,6 +83,10 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
     logWarning(
       "spark.shuffle.spill was set to false, but this configuration is ignored as of Spark 1.6+." +
         " Shuffle will continue to spill to disk when necessary.")
+  }
+
+  if (conf.get(SHUFFLE_MULTITHREADED)) {
+    SortShuffleManager.startThreadPoolIfNeeded(conf.get(SHUFFLE_MULTITHREADED_WRITER_THREADS))
   }
 
   /**
@@ -168,6 +177,9 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
           metrics,
           shuffleExecutorComponents)
       case bypassMergeSortHandle: BypassMergeSortShuffleHandle[K @unchecked, V @unchecked] =>
+        if (bypassMergeSortHandle.dependency.isInstanceOf[SplitShuffleDependency[_, _, _]]) {
+          SortShuffleManager.startThreadPoolIfNeeded(conf.get(SHUFFLE_MULTITHREADED_WRITER_THREADS))
+        }
         new BypassMergeSortShuffleWriter(
           env.blockManager,
           bypassMergeSortHandle,
@@ -193,6 +205,10 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
   /** Shut down this ShuffleManager. */
   override def stop(): Unit = {
     shuffleBlockResolver.stop()
+
+    if (conf.get(SHUFFLE_MULTITHREADED)) {
+      SortShuffleManager.stopThreadPool()
+    }
   }
 }
 
@@ -212,6 +228,11 @@ private[spark] object SortShuffleManager extends Logging {
    */
   val FETCH_SHUFFLE_BLOCKS_IN_BATCH_ENABLED_KEY =
     "__fetch_continuous_blocks_in_batch_enabled"
+
+  private var numWriterSlots: Int = 0
+  private lazy val writerSlots = new mutable.HashMap[Int, Slot]()
+  private val writerSlotNumber = new AtomicInteger(0)
+  private var mtShuffleInitialized: Boolean = false
 
   /**
    * Helper method for determining whether a shuffle reader should fetch the continuous blocks
@@ -258,6 +279,31 @@ private[spark] object SortShuffleManager extends Logging {
       extraConfigs.asJava)
     executorComponents
   }
+
+  def queueWriteTask[T](slotNum: Int, task: Callable[T]): Future[T] = {
+     writerSlots(slotNum % numWriterSlots).offer(task)
+  }
+
+  def startThreadPoolIfNeeded(numWriterThreads: Int): Unit = synchronized {
+    if (!mtShuffleInitialized) {
+      mtShuffleInitialized = true
+      numWriterSlots = numWriterThreads
+      if (writerSlots.isEmpty) {
+        (0 until numWriterSlots).foreach { slotNum =>
+          writerSlots.put(slotNum, new Slot(slotNum, "writer"))
+        }
+      }
+    }
+  }
+
+  def stopThreadPool(): Unit = synchronized {
+    mtShuffleInitialized = false
+    writerSlots.values.foreach(_.shutdownNow())
+    writerSlots.clear()
+  }
+
+  def getNextWriterSlot: Int = Math.abs(writerSlotNumber.incrementAndGet())
+
 }
 
 /**
@@ -279,3 +325,17 @@ private[spark] class BypassMergeSortShuffleHandle[K, V](
   dependency: ShuffleDependency[K, V, V])
   extends BaseShuffleHandle(shuffleId, dependency) {
 }
+
+ private class Slot(slotNum: Int, slotType: String) {
+  private val p = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder()
+    .setNameFormat(s"split-shuffle-$slotType-$slotNum")
+    .setDaemon(true)
+    .build())
+
+  def offer[T](task: Callable[T]): Future[T] = {
+    p.submit(task)
+  }
+
+  def shutdownNow(): Unit = p.shutdownNow()
+}
+

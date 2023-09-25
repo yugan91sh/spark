@@ -51,6 +51,8 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
 
   private var mapSideCombine: Boolean = false
 
+  private var splitShuffle: Boolean = false
+
   /** Set a serializer for this RDD's shuffle, or null to use the default (spark.serializer) */
   def setSerializer(serializer: Serializer): ShuffledRDD[K, V, C] = {
     this.userSpecifiedSerializer = Option(serializer)
@@ -75,6 +77,12 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
     this
   }
 
+  /** Set useMultiThreadedShuffle flag for RDD's shuffle. */
+  def setSplitShuffle(splitShuffle: Boolean): ShuffledRDD[K, V, C] = {
+    this.splitShuffle = splitShuffle
+    this
+  }
+
   override def getDependencies: Seq[Dependency[_]] = {
     val serializer = userSpecifiedSerializer.getOrElse {
       val serializerManager = SparkEnv.get.serializerManager
@@ -84,7 +92,13 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
         serializerManager.getSerializer(implicitly[ClassTag[K]], implicitly[ClassTag[V]])
       }
     }
-    List(new ShuffleDependency(prev, part, serializer, keyOrdering, aggregator, mapSideCombine))
+
+    if (splitShuffle) {
+      List(
+        new SplitShuffleDependency(prev, part, serializer, keyOrdering, aggregator, mapSideCombine))
+    } else {
+      List(new ShuffleDependency(prev, part, serializer, keyOrdering, aggregator, mapSideCombine))
+    }
   }
 
   override val partitioner = Some(part)

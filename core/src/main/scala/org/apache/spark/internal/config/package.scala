@@ -1531,6 +1531,21 @@ package object config {
       .booleanConf
       .createWithDefault(true)
 
+  private[spark] val SHUFFLE_MULTITHREADED =
+    ConfigBuilder("spark.shuffle.multiThreaded")
+      .doc(s"Enable multi threaded.")
+      .version("3.2.0")
+      .booleanConf
+      .createWithDefault(false)
+
+  val SHUFFLE_MULTITHREADED_WRITER_THREADS =
+    ConfigBuilder("spark.shuffle.multiThreaded.writer.threads")
+      .doc("The number of threads to use for writing " +
+        "shuffle blocks per executor in the shuffle manager.")
+      .intConf
+      .checkValue(_ > 0, "The value should be a positive integer.")
+      .createWithDefault(10)
+
   private[spark] val STORAGE_LOCAL_DISK_BY_EXECUTORS_CACHE_SIZE =
     ConfigBuilder("spark.storage.localDiskByExecutors.cacheSize")
       .doc("The max number of executors for which the local dirs are stored. This size is " +

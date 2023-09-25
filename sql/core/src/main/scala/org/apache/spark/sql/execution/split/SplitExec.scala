@@ -43,15 +43,15 @@ case class SplitExec(rowCount: Long, partitionNum: Int, preferShuffle: Boolean, 
 
   private def doSplit[U: ClassTag](prev: RDD[U]): RDD[U] = {
     val parallelism = sparkContext.defaultParallelism
-    val partNum = (sparkContext.defaultMinPartitions max
+    val numPartitions = (sparkContext.defaultMinPartitions max
       (parallelism / partitionNum)) max (parallelism min partitionNum)
-    if (prev.getNumPartitions < partNum) {
+    if (prev.getNumPartitions < numPartitions) {
       if (preferShuffle) {
         // Currently not supported: supportsColumnar, because `ColumnarBatch` is not serializable.
         // But maybe we can fix this in the future.
-        prev.coalesce(partNum, shuffle = true)
+        prev.coalesce(numPartitions, shuffle = true, splitShuffle = true)
       } else {
-        new SplitRDD[U](prev, rowCount, partNum)
+        new SplitRDD[U](prev, rowCount, numPartitions)
       }
     } else {
       prev

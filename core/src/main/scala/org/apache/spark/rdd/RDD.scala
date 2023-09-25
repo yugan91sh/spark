@@ -512,6 +512,7 @@ abstract class RDD[T: ClassTag](
    * passed in must be serializable.
    */
   def coalesce(numPartitions: Int, shuffle: Boolean = false,
+               splitShuffle: Boolean = false,
                partitionCoalescer: Option[PartitionCoalescer] = Option.empty)
               (implicit ord: Ordering[T] = null)
       : RDD[T] = withScope {
@@ -529,12 +530,11 @@ abstract class RDD[T: ClassTag](
       } : Iterator[(Int, T)]
 
       // include a shuffle step so that our upstream tasks are still distributed
-      new CoalescedRDD(
-        new ShuffledRDD[Int, T, T](
-          mapPartitionsWithIndexInternal(distributePartition, isOrderSensitive = true),
-          new HashPartitioner(numPartitions)),
-        numPartitions,
-        partitionCoalescer).values
+      val prev = new ShuffledRDD[Int, T, T](
+        mapPartitionsWithIndexInternal(distributePartition, isOrderSensitive = true),
+        new HashPartitioner(numPartitions)).setSplitShuffle(splitShuffle)
+
+      new CoalescedRDD(prev, numPartitions, partitionCoalescer).values
     } else {
       new CoalescedRDD(this, numPartitions, partitionCoalescer)
     }

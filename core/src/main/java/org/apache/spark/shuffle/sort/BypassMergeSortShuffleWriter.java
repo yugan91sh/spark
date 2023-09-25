@@ -22,7 +22,12 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.channels.FileChannel;
+import java.util.AbstractMap;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Future;
 import java.util.zip.Checksum;
 import javax.annotation.Nullable;
 
@@ -40,6 +45,7 @@ import org.apache.spark.Partitioner;
 import org.apache.spark.ShuffleDependency;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkException;
+import org.apache.spark.SplitShuffleDependency;
 import org.apache.spark.network.shuffle.checksum.ShuffleChecksumHelper;
 import org.apache.spark.shuffle.api.ShuffleExecutorComponents;
 import org.apache.spark.shuffle.api.ShuffleMapOutputWriter;
@@ -92,10 +98,11 @@ final class BypassMergeSortShuffleWriter<K, V>
   private final int shuffleId;
   private final long mapId;
   private final Serializer serializer;
+  private final boolean useMultiThreadedShuffle;
   private final ShuffleExecutorComponents shuffleExecutorComponents;
 
   /** Array of file writers, one for each partition */
-  private DiskBlockObjectWriter[] partitionWriters;
+  private Map<Integer, Map.Entry<Integer, DiskBlockObjectWriter>> partitionSlotWriters;
   private FileSegment[] partitionWriterSegments;
   @Nullable private MapStatus mapStatus;
   private long[] partitionLengths;
@@ -127,13 +134,14 @@ final class BypassMergeSortShuffleWriter<K, V>
     this.numPartitions = partitioner.numPartitions();
     this.writeMetrics = writeMetrics;
     this.serializer = dep.serializer();
+    this.useMultiThreadedShuffle = dep instanceof SplitShuffleDependency;
     this.shuffleExecutorComponents = shuffleExecutorComponents;
     this.partitionChecksums = createPartitionChecksums(numPartitions, conf);
   }
 
   @Override
-  public void write(Iterator<Product2<K, V>> records) throws IOException {
-    assert (partitionWriters == null);
+  public void write(Iterator<Product2<K, V>> records) throws Exception {
+    assert (partitionSlotWriters == null);
     ShuffleMapOutputWriter mapOutputWriter = shuffleExecutorComponents
         .createMapOutputWriter(shuffleId, mapId, numPartitions);
     try {
@@ -146,7 +154,7 @@ final class BypassMergeSortShuffleWriter<K, V>
       }
       final SerializerInstance serInstance = serializer.newInstance();
       final long openStartTime = System.nanoTime();
-      partitionWriters = new DiskBlockObjectWriter[numPartitions];
+      partitionSlotWriters = new HashMap<>(numPartitions);
       partitionWriterSegments = new FileSegment[numPartitions];
       for (int i = 0; i < numPartitions; i++) {
         final Tuple2<TempShuffleBlockId, File> tempShuffleBlockIdPlusFile =
@@ -158,21 +166,52 @@ final class BypassMergeSortShuffleWriter<K, V>
         if (partitionChecksums.length > 0) {
           writer.setChecksum(partitionChecksums[i]);
         }
-        partitionWriters[i] = writer;
+        int slotNum = SortShuffleManager.getNextWriterSlot();
+        partitionSlotWriters.put(i, new AbstractMap.SimpleEntry<>(slotNum, writer));
       }
       // Creating the file to write to and creating a disk writer both involve interacting with
       // the disk, and can take a long time in aggregate when we open many files, so should be
       // included in the shuffle write time.
       writeMetrics.incWriteTime(System.nanoTime() - openStartTime);
 
-      while (records.hasNext()) {
-        final Product2<K, V> record = records.next();
-        final K key = record._1();
-        partitionWriters[partitioner.getPartition(key)].write(key, record._2());
+      final long starttttt = System.currentTimeMillis();
+      if (useMultiThreadedShuffle) {
+        final LinkedList<Future<Void>> writeFutures = new LinkedList<>();
+        try {
+          while (records.hasNext()) {
+            final Product2<K, V> record = records.next();
+            final K key = record._1();
+            Map.Entry<Integer, DiskBlockObjectWriter> entry =
+                    partitionSlotWriters.get(partitioner.getPartition(key));
+            final int slotNum = entry.getKey();
+            final DiskBlockObjectWriter writer = entry.getValue();
+
+            writeFutures.add(SortShuffleManager.queueWriteTask(slotNum, () -> {
+              writer.write(key, record._2());
+              return null;
+            }));
+          }
+        } finally {
+          try {
+            while (!writeFutures.isEmpty()) {
+              writeFutures.remove().get();
+            }
+          } finally {
+            writeFutures.forEach(f -> f.cancel(true));
+          }
+        }
+      } else {
+        while (records.hasNext()) {
+          final Product2<K, V> record = records.next();
+          final K key = record._1();
+          partitionSlotWriters.get(partitioner.getPartition(key)).getValue().write(key, record._2());
+        }
       }
 
+      final long timeSpanned = System.currentTimeMillis() - starttttt;
+
       for (int i = 0; i < numPartitions; i++) {
-        try (DiskBlockObjectWriter writer = partitionWriters[i]) {
+        try (DiskBlockObjectWriter writer = partitionSlotWriters.get(i).getValue()) {
           partitionWriterSegments[i] = writer.commitAndGet();
         }
       }
@@ -203,7 +242,7 @@ final class BypassMergeSortShuffleWriter<K, V>
    */
   private long[] writePartitionedData(ShuffleMapOutputWriter mapOutputWriter) throws IOException {
     // Track location of the partition starts in the output file
-    if (partitionWriters != null) {
+    if (partitionSlotWriters != null) {
       final long writeStartTime = System.nanoTime();
       try {
         for (int i = 0; i < numPartitions; i++) {
@@ -230,7 +269,7 @@ final class BypassMergeSortShuffleWriter<K, V>
       } finally {
         writeMetrics.incWriteTime(System.nanoTime() - writeStartTime);
       }
-      partitionWriters = null;
+      partitionSlotWriters = null;
     }
     return mapOutputWriter.commitAllPartitions(getChecksumValues(partitionChecksums))
       .getPartitionLengths();
@@ -285,17 +324,18 @@ final class BypassMergeSortShuffleWriter<K, V>
         return Option.apply(mapStatus);
       } else {
         // The map task failed, so delete our output data.
-        if (partitionWriters != null) {
+        if (partitionSlotWriters != null) {
           try {
-            for (DiskBlockObjectWriter writer : partitionWriters) {
+            partitionSlotWriters.values().forEach(e -> {
+              DiskBlockObjectWriter writer = e.getValue();
               // This method explicitly does _not_ throw exceptions:
               File file = writer.revertPartialWritesAndClose();
               if (!file.delete()) {
                 logger.error("Error while deleting file {}", file.getAbsolutePath());
               }
-            }
+            });
           } finally {
-            partitionWriters = null;
+            partitionSlotWriters = null;
           }
         }
         return None$.empty();

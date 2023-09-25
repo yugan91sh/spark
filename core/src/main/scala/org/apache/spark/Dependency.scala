@@ -209,3 +209,14 @@ class RangeDependency[T](rdd: RDD[T], inStart: Int, outStart: Int, length: Int)
     }
   }
 }
+
+class SplitShuffleDependency[K: ClassTag, V: ClassTag, C: ClassTag](
+  rdd: RDD[_ <: Product2[K, V]],
+  partitioner: Partitioner,
+  serializer: Serializer = SparkEnv.get.serializer,
+  keyOrdering: Option[Ordering[K]] = None,
+  aggregator: Option[Aggregator[K, V, C]] = None,
+  mapSideCombine: Boolean = false,
+  shuffleWriterProcessor: ShuffleWriteProcessor = new ShuffleWriteProcessor)
+  extends ShuffleDependency[K, V, C](rdd, partitioner, serializer, keyOrdering,
+    aggregator, mapSideCombine, shuffleWriterProcessor)
