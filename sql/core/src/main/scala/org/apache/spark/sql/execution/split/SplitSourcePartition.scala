@@ -26,16 +26,16 @@ import org.apache.spark.sql.execution.exchange.BroadcastExchangeExec
 object SplitSourcePartition extends Rule[SparkPlan] {
 
   override def apply(plan: SparkPlan): SparkPlan = {
-    if (!plan.conf.splitSourcePartitionEnabled || plan.find(_.isSplittableScan).isEmpty) {
+    if (!plan.conf.splitSourcePartitionEnabled ||
+      plan.find(_.isInstanceOf[DataSourceScanExec]).isEmpty) {
       return plan
     }
 
     val r = plan.transformOnceWithPruning(shouldBreak) {
-      case p if p != null && p.isSplittableScan =>
-        val rowCount = plan.conf.splitSourcePartitionRowCount
-        val partitionNum = plan.conf.splitSourcePartitionNum
-        val preferShuffle = plan.conf.splitSourcePartitionPreferShuffle
-        SplitExec(rowCount, partitionNum, preferShuffle, p)
+      case p if p != null && p.isInstanceOf[DataSourceScanExec] =>
+        val expandNum = plan.conf.splitSourcePartitionExpandNum
+        val threshSize = plan.conf.splitSourcePartitionThreshold
+        SplitExec(expandNum, threshSize, p)
       case other => other
     }
     r
@@ -53,7 +53,7 @@ object SplitSourcePartition extends Rule[SparkPlan] {
   private def askChild(plan: SparkPlan): Boolean =
     plan match {
       case n if n == null => false
-      case l: LeafExecNode => l.isSplittableScan
+      case l: LeafExecNode => l.isInstanceOf[DataSourceScanExec]
       case u: UnaryExecNode => askChild(u.child)
       case _ => false
     }

@@ -19,7 +19,7 @@ package org.apache.spark.rdd
 
 import java.util.Random
 
-import scala.collection.{mutable, Iterator, Map}
+import scala.collection.{mutable, Map}
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Codec
 import scala.language.implicitConversions
@@ -45,7 +45,7 @@ import org.apache.spark.partial.GroupedCountEvaluator
 import org.apache.spark.partial.PartialResult
 import org.apache.spark.resource.ResourceProfile
 import org.apache.spark.storage.{RDDBlockId, StorageLevel}
-import org.apache.spark.util.{BoundedPriorityQueue, LongSliceIterator, Utils}
+import org.apache.spark.util.{BoundedPriorityQueue, Utils}
 import org.apache.spark.util.collection.{ExternalAppendOnlyMap, OpenHashMap, Utils => collectionUtils}
 import org.apache.spark.util.random.{BernoulliCellSampler, BernoulliSampler, PoissonSampler, SamplingUtils}
 
@@ -334,14 +334,6 @@ abstract class RDD[T: ClassTag](
     } else {
       computeOrReadCheckpoint(split, context)
     }
-  }
-
-  def sliceIterator(from: Long,
-                    until: Long,
-                    split: Partition,
-                    context: TaskContext): Iterator[T] = {
-    val iter = iterator(split, context)
-    new LongSliceIterator(iter, from, until)
   }
 
   /**
