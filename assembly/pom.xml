@@ -29,7 +29,6 @@
   <name>Spark Project Assembly</name>
   <url>https://spark.apache.org/</url>
   <packaging>pom</packaging>
-
   <properties>
     <sbt.project.name>assembly</sbt.project.name>
     <build.testJarPhase>none</build.testJarPhase>
